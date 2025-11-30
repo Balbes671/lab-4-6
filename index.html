@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Legend of Link</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="main-menu" class="screen active">
+    <div class="menu-container">
+        <h1>THE LEGEND OF LINK</h1>
+        <div class="menu-options">
+            <button id="new-game-btn">НОВАЯ ИГРА</button>
+        </div>
+    </div>
+</div>
+
+
+<div id="character-creation" class="screen">
+    <div class="menu-container">
+        <h1>СОЗДАНИЕ ПЕРСОНАЖА</h1>
+        <div class="character-form">
+            <label for="player-name">Имя героя:</label>
+            <input type="text" id="player-name" placeholder="Введите имя" maxlength="12">
+            <button id="start-game-btn">НАЧАТЬ ПРИКЛЮЧЕНИЕ</button>
+        </div>
+    </div>
+</div>
+
+
+<div id="game-screen" class="screen">
+    <canvas id="game-canvas" width="800" height="600"></canvas>
+    <div id="hud">
+        <div id="health-bar">
+            <div id="health-fill"></div>
+        </div>
+        <div id="player-info">
+            <span id="player-name-display">Link</span>
+            <span id="current-screen">Экран: 1/3</span>
+        </div>
+        <div id="inventory">
+            <div class="item-slot" id="weapon-slot">⚔️</div>
+            <div class="item-slot" id="shield-slot">🛡️</div>
+        </div>
+    </div>
+    <div id="screen-transition" class="hidden">
+        <div class="transition-text">Переход на следующий экран...</div>
+    </div>
+    <div id="controls-info">
+        <h3>Управление:</h3>
+        <p>←↑→↓ - Движение</p>
+        <p>ПРОБЕЛ - Атака</p>
+    </div>
+</div>
+
+
+<script src="script.js"></script>
+</body>
+</html>
