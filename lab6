@@ -1,0 +1,1136 @@
+import pygame
+import sys
+import math
+import random
+
+# Инициализация Pygame
+pygame.init()
+
+# Константы
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
+FPS = 60
+
+# Цвета
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+GREEN = (26, 71, 42)
+BLUE_GREEN = (45, 90, 90)
+PURPLE = (90, 45, 74)
+CAVE_PURPLE = (42, 26, 42)
+CAVE_WALL = (58, 42, 58)
+PLAYER_BLUE = (0, 102, 204)
+PLAYER_GRAY = (153, 153, 153)
+ENEMY_RED = (204, 0, 0)
+BOSS_RED = (153, 0, 0)
+SWORD_COLOR = (204, 204, 204)
+SWORD_HANDLE = (139, 69, 19)
+ROCK_COLOR = (102, 102, 102)
+ROCK_DETAIL = (136, 136, 136)
+TREE_TRUNK = (139, 69, 19)
+TREE_TOP = (45, 90, 45)
+DOOR_COLOR = (139, 69, 19)
+DOOR_LOCKED = (93, 41, 6)
+GOLD = (255, 215, 0)
+YELLOW = (255, 255, 0)
+LIGHT_BLUE = (100, 100, 255)
+SWORD_PROJECTILE_COLOR = (255, 255, 200)
+SWORD_TRAIL_COLOR = (255, 255, 150)
+
+class SwordProjectile:
+    def __init__(self, x, y, direction):
+        self.x = x
+        self.y = y
+        self.direction = direction
+        self.width = 24
+        self.height = 24
+        self.speed = 8
+        self.distance_traveled = 0
+        self.max_distance = 300  # Максимальная дальность полета меча
+        self.active = True
+        self.rotation = 0
+        self.trail = []  # Для эффекта следа
+        
+    def update(self):
+        if not self.active:
+            return False
+            
+        # Сохраняем старую позицию для следа
+        old_x, old_y = self.x, self.y
+        
+        # Движение в зависимости от направления
+        if self.direction == 'up':
+            self.y -= self.speed
+        elif self.direction == 'down':
+            self.y += self.speed
+        elif self.direction == 'left':
+            self.x -= self.speed
+        elif self.direction == 'right':
+            self.x += self.speed
+            
+        # Добавляем точку в след
+        self.trail.append((old_x + self.width//2, old_y + self.height//2))
+        if len(self.trail) > 10:  # Ограничиваем длину следа
+            self.trail.pop(0)
+            
+        # Вращение меча
+        self.rotation += 15
+        
+        # Увеличиваем пройденное расстояние
+        self.distance_traveled += self.speed
+        
+        # Проверяем, не пролетел ли меч максимальное расстояние
+        if self.distance_traveled >= self.max_distance:
+            self.active = False
+            return False
+            
+        # Проверяем границы экрана
+        if (self.x < -self.width or self.x > SCREEN_WIDTH or 
+            self.y < -self.height or self.y > SCREEN_HEIGHT):
+            self.active = False
+            return False
+            
+        return True
+        
+    def draw(self, screen):
+        # Рисуем след
+        for i, (trail_x, trail_y) in enumerate(self.trail):
+            alpha = int(255 * (i / len(self.trail)))
+            size = int(10 * (i / len(self.trail)))
+            pygame.draw.circle(screen, (*SWORD_TRAIL_COLOR[:3], alpha), 
+                             (int(trail_x), int(trail_y)), size)
+        
+        # Создаем поверхность для вращающегося меча
+        sword_surf = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        
+        # Рисуем меч
+        pygame.draw.rect(sword_surf, SWORD_COLOR, (0, 0, self.width, self.height))
+        pygame.draw.rect(sword_surf, SWORD_HANDLE, (8, 0, 8, self.height))
+        
+        # Добавляем блик на лезвии
+        pygame.draw.rect(sword_surf, (255, 255, 255, 150), 
+                        (2, 2, self.width - 4, self.height - 4))
+        
+        # Вращаем меч
+        rotated_sword = pygame.transform.rotate(sword_surf, self.rotation)
+        rect = rotated_sword.get_rect(center=(self.x + self.width//2, self.y + self.height//2))
+        
+        # Рисуем свечение вокруг меча
+        glow_size = 30
+        glow_surf = pygame.Surface((glow_size, glow_size), pygame.SRCALPHA)
+        pygame.draw.circle(glow_surf, (255, 255, 200, 100), 
+                         (glow_size//2, glow_size//2), glow_size//2)
+        screen.blit(glow_surf, (self.x + self.width//2 - glow_size//2, 
+                              self.y + self.height//2 - glow_size//2))
+        
+        screen.blit(rotated_sword, rect.topleft)
+
+class Player:
+    def __init__(self):
+        self.reset()
+        
+    def reset(self):
+        self.x = 400
+        self.y = 300
+        self.width = 32
+        self.height = 32
+        self.speed = 2
+        self.health = 100
+        self.max_health = 100
+        self.has_sword = False
+        self.name = "Link"
+        self.direction = "down"
+        self.attacking = False
+        self.attack_timer = 0
+        self.attack_sword = {"x": 0, "y": 0, "width": 0, "height": 0, "visible": False}
+        self.sword_thrown = False  # Флаг, что меч брошен
+        self.sword_projectile = None  # Объект летящего меча
+        self.sword_return_timer = 0  # Таймер возврата меча
+        
+    def can_throw_sword(self):
+        # Может бросить меч только при полном здоровье и если меч не в полете
+        return (self.health == self.max_health and 
+                self.has_sword and 
+                not self.sword_thrown and 
+                self.sword_projectile is None)
+                
+    def throw_sword(self):
+        if self.can_throw_sword():
+            # Определяем стартовую позицию меча в зависимости от направления
+            if self.direction == 'up':
+                start_x = self.x + self.width//2 - 12
+                start_y = self.y - 20
+            elif self.direction == 'down':
+                start_x = self.x + self.width//2 - 12
+                start_y = self.y + self.height + 4
+            elif self.direction == 'left':
+                start_x = self.x - 20
+                start_y = self.y + self.height//2 - 12
+            else:  # right
+                start_x = self.x + self.width + 4
+                start_y = self.y + self.height//2 - 12
+                
+            self.sword_projectile = SwordProjectile(start_x, start_y, self.direction)
+            self.sword_thrown = True
+            self.has_sword = False  # Временно теряем меч
+            return True
+        return False
+        
+    def return_sword(self):
+        # Возврат меча к игроку
+        if self.sword_projectile:
+            self.sword_projectile.active = False
+            self.sword_projectile = None
+        self.sword_thrown = False
+        self.has_sword = True
+
+class Sword:
+    def __init__(self):
+        self.x = 400
+        self.y = 200
+        self.width = 24
+        self.height = 24
+        self.collected = False
+        self.glow_alpha = 0
+        self.glow_increasing = True
+
+class Enemy:
+    def __init__(self, x, y, width, height, speed, health, enemy_type, **kwargs):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.speed = speed
+        self.health = health
+        self.type = enemy_type
+        self.is_boss = health > 100
+        self.projectiles = []  # Добавлено для всех врагов
+        
+        # Инициализация специфических параметров для разных типов врагов
+        if enemy_type == 'patrol':
+            self.patrol_points = kwargs.get('patrol_points', [])
+            self.current_patrol_index = kwargs.get('current_patrol_index', 0)
+            self.direction = kwargs.get('direction', 1)
+        elif enemy_type == 'circle':
+            self.center_x = kwargs.get('center_x', x)
+            self.center_y = kwargs.get('center_y', y)
+            self.radius = kwargs.get('radius', 50)
+            self.angle = kwargs.get('angle', 0)
+        elif enemy_type == 'random':
+            self.move_timer = kwargs.get('move_timer', 0)
+            self.target_x = kwargs.get('target_x', x)
+            self.target_y = kwargs.get('target_y', y)
+        elif enemy_type == 'chase':
+            self.chase_timer = kwargs.get('chase_timer', 0)
+            self.shoot_timer = kwargs.get('shoot_timer', 0)
+            
+    def create_projectile(self, target_x, target_y):
+        dx = target_x - (self.x + self.width / 2)
+        dy = target_y - (self.y + self.height / 2)
+        dist = max(math.sqrt(dx*dx + dy*dy), 0.1)
+        
+        return {
+            'x': self.x + self.width / 2 - 5,
+            'y': self.y + self.height / 2 - 5,
+            'width': 10,
+            'height': 10,
+            'speed': 3,
+            'dx': dx / dist,
+            'dy': dy / dist
+        }
+
+class Game:
+    def __init__(self):
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption("The Legend of Link")
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.Font(None, 36)
+        self.small_font = pygame.font.Font(None, 24)
+        
+        self.player = Player()
+        self.sword = Sword()
+        self.enemies = []
+        self.doors = []
+        self.obstacles = []
+        self.caves = []
+        
+        self.keys = {}
+        self.game_state = "main_menu"
+        self.current_screen = 1
+        self.total_screens = 4
+        
+        self.player_name = "Link"
+        self.name_input = ""
+        self.name_input_active = False
+        
+        # Эффекты
+        self.hit_particles = []
+        
+    def add_hit_particle(self, x, y, color=SWORD_PROJECTILE_COLOR):
+        self.hit_particles.append({
+            'x': x, 'y': y,
+            'vx': random.uniform(-2, 2),
+            'vy': random.uniform(-2, 2),
+            'life': 30,
+            'color': color,
+            'size': random.randint(3, 6)
+        })
+        
+    def update_particles(self):
+        for particle in self.hit_particles[:]:
+            particle['x'] += particle['vx']
+            particle['y'] += particle['vy']
+            particle['life'] -= 1
+            if particle['life'] <= 0:
+                self.hit_particles.remove(particle)
+                
+    def draw_particles(self):
+        for particle in self.hit_particles:
+            alpha = int(255 * (particle['life'] / 30))
+            pygame.draw.circle(self.screen, 
+                             (*particle['color'][:3], alpha),
+                             (int(particle['x']), int(particle['y'])),
+                             particle['size'])
+        
+    def check_collision(self, obj1, obj2):
+        return (obj1.x < obj2.x + obj2.width and
+                obj1.x + obj1.width > obj2.x and
+                obj1.y < obj2.y + obj2.height and
+                obj1.y + obj1.height > obj2.y)
+    
+    def update_attack_sword_position(self):
+        if self.player.direction == 'up':
+            self.player.attack_sword = {
+                'x': self.player.x + 4, 
+                'y': self.player.y - 16,
+                'width': 24, 'height': 16, 'visible': True
+            }
+        elif self.player.direction == 'down':
+            self.player.attack_sword = {
+                'x': self.player.x + 4, 
+                'y': self.player.y + self.player.height,
+                'width': 24, 'height': 16, 'visible': True
+            }
+        elif self.player.direction == 'left':
+            self.player.attack_sword = {
+                'x': self.player.x - 16, 
+                'y': self.player.y + 4,
+                'width': 16, 'height': 24, 'visible': True
+            }
+        elif self.player.direction == 'right':
+            self.player.attack_sword = {
+                'x': self.player.x + self.player.width, 
+                'y': self.player.y + 4,
+                'width': 16, 'height': 24, 'visible': True
+            }
+    
+    def load_screen(self, screen_number):
+        self.current_screen = screen_number
+        self.enemies = []
+        self.doors = []
+        self.obstacles = []
+        self.caves = []
+        
+        # Если меч был брошен, возвращаем его
+        if self.player.sword_thrown:
+            self.player.return_sword()
+        
+        # Сброс позиции игрока
+        if screen_number == 1:
+            self.player.x, self.player.y = 400, 300
+        elif screen_number == 2:
+            self.player.x, self.player.y = 400, 500
+        elif screen_number in [3, 4]:
+            self.player.x, self.player.y = 50, 300
+            
+        self.player.attacking = False
+        self.player.attack_timer = 0
+        
+        if screen_number != 2:
+            self.sword.collected = self.player.has_sword
+        
+        if screen_number == 1:
+            # Первый экран с пещерой
+            self.caves.append({'x': 350, 'y': 200, 'width': 100, 'height': 80, 'type': 'entrance'})
+            
+            self.obstacles.extend([
+                {'x': 100, 'y': 100, 'width': 40, 'height': 40, 'type': 'rock'},
+                {'x': 600, 'y': 100, 'width': 40, 'height': 40, 'type': 'rock'},
+                {'x': 100, 'y': 450, 'width': 60, 'height': 60, 'type': 'tree'},
+                {'x': 600, 'y': 450, 'width': 60, 'height': 60, 'type': 'tree'},
+                {'x': 350, 'y': 500, 'width': 40, 'height': 40, 'type': 'rock'}
+            ])
+            
+            self.doors.append({
+                'x': 750, 'y': 250, 'width': 30, 'height': 100,
+                'next_screen': 3, 'locked': not self.player.has_sword
+            })
+            
+        elif screen_number == 2:
+            # Пещера
+            self.sword.x, self.sword.y = 400, 200
+            self.sword.collected = self.player.has_sword
+            
+            self.doors.append({
+                'x': 350, 'y': 550, 'width': 100, 'height': 30,
+                'next_screen': 1, 'locked': False
+            })
+            
+            # Стены пещеры с проходом
+            self.obstacles.extend([
+                {'x': 0, 'y': 0, 'width': 800, 'height': 50, 'type': 'cave_wall'},
+                {'x': 0, 'y': 0, 'width': 50, 'height': 600, 'type': 'cave_wall'},
+                {'x': 750, 'y': 0, 'width': 50, 'height': 600, 'type': 'cave_wall'},
+                {'x': 0, 'y': 550, 'width': 350, 'height': 50, 'type': 'cave_wall'},
+                {'x': 450, 'y': 550, 'width': 350, 'height': 50, 'type': 'cave_wall'}
+            ])
+            
+        elif screen_number == 3:
+            # Второй экран с врагами
+            self.enemies.extend([
+                Enemy(600, 150, 32, 32, 1, 30, 'patrol',
+                     patrol_points=[(600, 150), (700, 150), (700, 250), (600, 250)],
+                     current_patrol_index=0, direction=1),
+                Enemy(100, 400, 32, 32, 1, 30, 'circle',
+                     center_x=150, center_y=350, radius=80, angle=0)
+            ])
+            
+            self.obstacles.extend([
+                {'x': 200, 'y': 150, 'width': 40, 'height': 40, 'type': 'rock'},
+                {'x': 400, 'y': 300, 'width': 60, 'height': 60, 'type': 'tree'},
+                {'x': 600, 'y': 400, 'width': 40, 'height': 40, 'type': 'rock'}
+            ])
+            
+            self.doors.append({
+                'x': 750, 'y': 250, 'width': 30, 'height': 100,
+                'next_screen': 4, 'locked': len(self.enemies) > 0
+            })
+            
+        elif screen_number == 4:
+            # Третий экран с боссом
+            self.enemies.extend([
+                Enemy(600, 150, 32, 32, 1, 30, 'random',
+                     move_timer=0, target_x=600, target_y=150),
+                Enemy(100, 400, 32, 32, 1, 30, 'patrol',
+                     patrol_points=[(100, 400), (200, 400), (200, 300), (100, 300)],
+                     current_patrol_index=0, direction=1),
+                Enemy(400, 100, 32, 32, 1, 30, 'circle',
+                     center_x=400, center_y=150, radius=50, angle=0),
+                Enemy(200, 500, 55, 55, 0.7, 500, 'chase',
+                     chase_timer=0, shoot_timer=0)
+            ])
+            
+            self.obstacles.extend([
+                {'x': 300, 'y': 200, 'width': 40, 'height': 40, 'type': 'rock'},
+                {'x': 500, 'y': 200, 'width': 40, 'height': 40, 'type': 'rock'},
+                {'x': 300, 'y': 400, 'width': 60, 'height': 60, 'type': 'tree'},
+                {'x': 500, 'y': 400, 'width': 60, 'height': 60, 'type': 'tree'}
+            ])
+    
+    def update(self):
+        if self.game_state != "playing":
+            return
+            
+        # Обновление частиц
+        self.update_particles()
+            
+        # Обновление атаки
+        if self.player.attacking:
+            self.player.attack_timer -= 1
+            if self.player.attack_timer <= 0:
+                self.player.attacking = False
+                self.player.attack_sword['visible'] = False
+        
+        # Обновление летящего меча
+        if self.player.sword_projectile and self.player.sword_projectile.active:
+            if not self.player.sword_projectile.update():
+                # Меч закончил полет, возвращаем его
+                self.player.return_sword()
+            else:
+                # Проверка столкновений летящего меча с врагами
+                sword_rect = pygame.Rect(self.player.sword_projectile.x,
+                                       self.player.sword_projectile.y,
+                                       self.player.sword_projectile.width,
+                                       self.player.sword_projectile.height)
+                
+                for enemy in self.enemies[:]:
+                    enemy_rect = pygame.Rect(enemy.x, enemy.y, enemy.width, enemy.height)
+                    if sword_rect.colliderect(enemy_rect):
+                        # Наносим урон врагу
+                        enemy.health -= 25  # Летящий меч наносит больше урона
+                        
+                        # Эффект попадания
+                        self.add_hit_particle(enemy.x + enemy.width//2,
+                                            enemy.y + enemy.height//2)
+                        
+                        # Если враг умер
+                        if enemy.health <= 0:
+                            self.enemies.remove(enemy)
+                            # Разблокировка двери на 3 экране
+                            if self.current_screen == 3 and len(self.enemies) == 0:
+                                for door in self.doors:
+                                    if door['next_screen'] == 4:
+                                        door['locked'] = False
+                        
+                        # Меч отскакивает от врага и возвращается
+                        self.player.return_sword()
+                        break
+                
+                # Проверка столкновений с препятствиями
+                for obstacle in self.obstacles:
+                    obstacle_rect = pygame.Rect(obstacle['x'], obstacle['y'],
+                                              obstacle['width'], obstacle['height'])
+                    if sword_rect.colliderect(obstacle_rect):
+                        # Эффект удара о препятствие
+                        self.add_hit_particle(self.player.sword_projectile.x + 12,
+                                            self.player.sword_projectile.y + 12,
+                                            (255, 100, 100))
+                        self.player.return_sword()
+                        break
+        
+        # Анимация свечения меча в пещере
+        if not self.sword.collected:
+            if self.sword.glow_increasing:
+                self.sword.glow_alpha += 3
+                if self.sword.glow_alpha >= 150:
+                    self.sword.glow_increasing = False
+            else:
+                self.sword.glow_alpha -= 3
+                if self.sword.glow_alpha <= 50:
+                    self.sword.glow_increasing = True
+        
+        # Движение игрока
+        prev_x, prev_y = self.player.x, self.player.y
+        
+        if self.keys.get(pygame.K_UP):
+            self.player.y -= self.player.speed
+            self.player.direction = 'up'
+        if self.keys.get(pygame.K_DOWN):
+            self.player.y += self.player.speed
+            self.player.direction = 'down'
+        if self.keys.get(pygame.K_LEFT):
+            self.player.x -= self.player.speed
+            self.player.direction = 'left'
+        if self.keys.get(pygame.K_RIGHT):
+            self.player.x += self.player.speed
+            self.player.direction = 'right'
+        
+        # Проверка столкновений с препятствиями
+        collision = False
+        player_rect = pygame.Rect(self.player.x, self.player.y, self.player.width, self.player.height)
+        for obstacle in self.obstacles:
+            obstacle_rect = pygame.Rect(obstacle['x'], obstacle['y'], obstacle['width'], obstacle['height'])
+            if player_rect.colliderect(obstacle_rect):
+                collision = True
+                break
+                
+        if collision:
+            self.player.x, self.player.y = prev_x, prev_y
+        
+        # Границы экрана
+        self.player.x = max(0, min(SCREEN_WIDTH - self.player.width, self.player.x))
+        self.player.y = max(0, min(SCREEN_HEIGHT - self.player.height, self.player.y))
+        
+        # Вход в пещеру
+        if self.current_screen == 1 and not self.player.has_sword:
+            for cave in self.caves:
+                cave_rect = pygame.Rect(cave['x'], cave['y'], cave['width'], cave['height'])
+                if player_rect.colliderect(cave_rect):
+                    self.load_screen(2)
+                    break
+        
+        # Подбор меча в пещере
+        if (self.current_screen == 2 and not self.sword.collected and 
+            player_rect.colliderect(pygame.Rect(self.sword.x, self.sword.y, self.sword.width, self.sword.height))):
+            self.sword.collected = True
+            self.player.has_sword = True
+        
+        # Выход через двери
+        for door in self.doors:
+            door_rect = pygame.Rect(door['x'], door['y'], door['width'], door['height'])
+            if not door['locked'] and player_rect.colliderect(door_rect):
+                self.load_screen(door['next_screen'])
+                break
+        
+        # Обновление позиции меча атаки (ближний бой)
+        if self.player.attacking and not self.player.sword_thrown:
+            self.update_attack_sword_position()
+        
+        # Движение врагов (экраны 3 и 4)
+        if self.current_screen >= 3:
+            for enemy in self.enemies[:]:
+                prev_ex, prev_ey = enemy.x, enemy.y
+                
+                # Логика движения врагов
+                if enemy.type == 'patrol':
+                    target = enemy.patrol_points[enemy.current_patrol_index]
+                    dx, dy = target[0] - enemy.x, target[1] - enemy.y
+                    dist = math.sqrt(dx*dx + dy*dy)
+                    
+                    if dist < 5:
+                        enemy.current_patrol_index += enemy.direction
+                        if (enemy.current_patrol_index >= len(enemy.patrol_points) or 
+                            enemy.current_patrol_index < 0):
+                            enemy.direction *= -1
+                            enemy.current_patrol_index += enemy.direction * 2
+                    else:
+                        enemy.x += (dx/dist) * enemy.speed
+                        enemy.y += (dy/dist) * enemy.speed
+                        
+                elif enemy.type == 'circle':
+                    enemy.angle += 0.02
+                    enemy.x = enemy.center_x + math.cos(enemy.angle) * enemy.radius
+                    enemy.y = enemy.center_y + math.sin(enemy.angle) * enemy.radius
+                    
+                elif enemy.type == 'random':
+                    enemy.move_timer -= 1
+                    if enemy.move_timer <= 0:
+                        enemy.target_x = random.randint(0, SCREEN_WIDTH - enemy.width)
+                        enemy.target_y = random.randint(0, SCREEN_HEIGHT - enemy.height)
+                        enemy.move_timer = random.randint(60, 120)
+                    
+                    dx, dy = enemy.target_x - enemy.x, enemy.target_y - enemy.y
+                    dist = math.sqrt(dx*dx + dy*dy)
+                    if dist > 0:
+                        enemy.x += (dx/dist) * enemy.speed
+                        enemy.y += (dy/dist) * enemy.speed
+                        
+                elif enemy.type == 'chase':
+                    enemy.chase_timer -= 1
+                    if enemy.chase_timer <= 0:
+                        dx, dy = self.player.x - enemy.x, self.player.y - enemy.y
+                        dist = math.sqrt(dx*dx + dy*dy)
+                        if dist > 0:
+                            enemy.x += (dx/dist) * enemy.speed
+                            enemy.y += (dy/dist) * enemy.speed
+                        if random.random() < 0.1:
+                            enemy.chase_timer = random.randint(30, 60)
+                
+                # Стрельба босса (только для врагов типа 'chase')
+                if enemy.type == 'chase':
+                    enemy.shoot_timer -= 1
+                    if enemy.shoot_timer <= 0:
+                        if not hasattr(enemy, 'projectiles'):
+                            enemy.projectiles = []
+                        enemy.projectiles.append(enemy.create_projectile(self.player.x, self.player.y))
+                        enemy.shoot_timer = 60
+                
+                # Движение снарядов босса (только для врагов типа 'chase')
+                if enemy.type == 'chase' and hasattr(enemy, 'projectiles'):
+                    for projectile in enemy.projectiles[:]:
+                        dx, dy = projectile['dx'], projectile['dy']
+                        projectile['x'] += dx * projectile['speed']
+                        projectile['y'] += dy * projectile['speed']
+                        
+                        # Столкновение снаряда с игроком
+                        proj_rect = pygame.Rect(projectile['x'], projectile['y'], 
+                                              projectile['width'], projectile['height'])
+                        if player_rect.colliderect(proj_rect):
+                            self.player.health -= 10
+                            enemy.projectiles.remove(projectile)
+                            if self.player.health <= 0:
+                                self.game_state = "game_over"
+                        
+                        # Удаление снарядов за экраном
+                        if (projectile['x'] < -50 or projectile['x'] > SCREEN_WIDTH + 50 or
+                            projectile['y'] < -50 or projectile['y'] > SCREEN_HEIGHT + 50):
+                            enemy.projectiles.remove(projectile)
+                
+                # Столкновение врага с препятствиями
+                enemy_collision = False
+                enemy_rect = pygame.Rect(enemy.x, enemy.y, enemy.width, enemy.height)
+                for obstacle in self.obstacles:
+                    obstacle_rect = pygame.Rect(obstacle['x'], obstacle['y'], 
+                                              obstacle['width'], obstacle['height'])
+                    if enemy_rect.colliderect(obstacle_rect):
+                        enemy_collision = True
+                        break
+                
+                if enemy_collision:
+                    enemy.x, enemy.y = prev_ex, prev_ey
+                
+                # Столкновение врага с игроком
+                if player_rect.colliderect(enemy_rect):
+                    self.player.health -= 0.5
+                    if self.player.health <= 0:
+                        self.game_state = "game_over"
+                
+                # Атака игрока мечом (ближний бой)
+                if (self.player.attacking and not self.player.sword_thrown and 
+                    self.player.attack_sword['visible'] and
+                    pygame.Rect(self.player.attack_sword['x'], self.player.attack_sword['y'],
+                              self.player.attack_sword['width'], self.player.attack_sword['height']).colliderect(enemy_rect)):
+                    enemy.health -= 10
+                    if enemy.health <= 0:
+                        self.enemies.remove(enemy)
+                        
+                        # Разблокировка двери на 3 экране
+                        if self.current_screen == 3 and len(self.enemies) == 0:
+                            for door in self.doors:
+                                if door['next_screen'] == 4:
+                                    door['locked'] = False
+                
+                # Атака игрока по снарядам (только для врагов типа 'chase')
+                if self.player.attacking and self.player.attack_sword['visible']:
+                    attack_rect = pygame.Rect(self.player.attack_sword['x'], self.player.attack_sword['y'],
+                                            self.player.attack_sword['width'], self.player.attack_sword['height'])
+                    for enemy in self.enemies:
+                        if hasattr(enemy, 'projectiles'):
+                            for projectile in enemy.projectiles[:]:
+                                proj_rect = pygame.Rect(projectile['x'], projectile['y'],
+                                                      projectile['width'], projectile['height'])
+                                if attack_rect.colliderect(proj_rect):
+                                    enemy.projectiles.remove(projectile)
+        
+        # Проверка победы
+        if self.current_screen == self.total_screens and len(self.enemies) == 0:
+            self.game_state = "victory"
+    
+    def draw(self):
+        self.screen.fill(BLACK)
+        
+        # Отрисовка фона
+        if self.current_screen == 1:
+            self.screen.fill(GREEN)
+        elif self.current_screen == 2:
+            self.screen.fill(CAVE_PURPLE)
+        elif self.current_screen == 3:
+            self.screen.fill(BLUE_GREEN)
+        elif self.current_screen == 4:
+            self.screen.fill(PURPLE)
+        
+        # Отрисовка препятствий
+        for obstacle in self.obstacles:
+            rect = pygame.Rect(obstacle['x'], obstacle['y'], obstacle['width'], obstacle['height'])
+            if obstacle['type'] == 'rock':
+                pygame.draw.rect(self.screen, ROCK_COLOR, rect)
+                # Детали камня
+                pygame.draw.rect(self.screen, ROCK_DETAIL, 
+                               (obstacle['x'] + 5, obstacle['y'] + 5, 10, 10))
+                pygame.draw.rect(self.screen, ROCK_DETAIL,
+                               (obstacle['x'] + 25, obstacle['y'] + 15, 8, 8))
+            elif obstacle['type'] == 'tree':
+                # Ствол
+                pygame.draw.rect(self.screen, TREE_TRUNK,
+                               (obstacle['x'] + 20, obstacle['y'] + 40, 20, 20))
+                # Крона
+                pygame.draw.circle(self.screen, TREE_TOP,
+                                 (obstacle['x'] + 30, obstacle['y'] + 30), 25)
+            elif obstacle['type'] == 'cave_wall':
+                pygame.draw.rect(self.screen, CAVE_WALL, rect)
+                # Текстура
+                for i in range(5):
+                    for j in range(5):
+                        if (i + j) % 2 == 0:
+                            pygame.draw.rect(self.screen, (74, 58, 74),
+                                           (obstacle['x'] + i * (obstacle['width'] / 5),
+                                            obstacle['y'] + j * (obstacle['height'] / 5),
+                                            obstacle['width'] / 5 - 2, obstacle['height'] / 5 - 2))
+        
+        # Отрисовка пещеры на 1 экране
+        if self.current_screen == 1:
+            for cave in self.caves:
+                pygame.draw.rect(self.screen, (51, 51, 51), 
+                               (cave['x'], cave['y'], cave['width'], cave['height']))
+                pygame.draw.rect(self.screen, (26, 26, 26),
+                               (cave['x'] + 10, cave['y'] + 10, cave['width'] - 20, cave['height'] - 10))
+                text = self.small_font.render("Пещера", True, WHITE)
+                self.screen.blit(text, (cave['x'] + cave['width'] // 2 - text.get_width() // 2, cave['y'] - 20))
+        
+        # Отрисовка меча в пещере
+        if self.current_screen == 2 and not self.sword.collected:
+            # Свечение меча
+            glow_surf = pygame.Surface((60, 60), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (255, 255, 200, self.sword.glow_alpha),
+                             (30, 30), 30)
+            self.screen.blit(glow_surf, (self.sword.x - 18, self.sword.y - 18))
+            
+            pygame.draw.rect(self.screen, SWORD_COLOR,
+                           (self.sword.x, self.sword.y, self.sword.width, self.sword.height))
+            pygame.draw.rect(self.screen, SWORD_HANDLE,
+                           (self.sword.x + 8, self.sword.y, 8, 12))
+        
+        # Отрисовка частиц
+        self.draw_particles()
+        
+        # Отрисовка летящего меча
+        if self.player.sword_projectile and self.player.sword_projectile.active:
+            self.player.sword_projectile.draw(self.screen)
+        
+        # Отрисовка игрока
+        color = PLAYER_BLUE if self.player.has_sword else PLAYER_GRAY
+        pygame.draw.rect(self.screen, color,
+                       (self.player.x, self.player.y, self.player.width, self.player.height))
+        # Глаза
+        pygame.draw.rect(self.screen, WHITE, (self.player.x + 8, self.player.y + 8, 4, 4))
+        pygame.draw.rect(self.screen, WHITE, (self.player.x + 20, self.player.y + 8, 4, 4))
+        
+        # Если меч брошен, рисуем индикатор отсутствия меча
+        if self.player.sword_thrown:
+            pygame.draw.line(self.screen, (255, 100, 100),
+                           (self.player.x, self.player.y),
+                           (self.player.x + self.player.width, self.player.y + self.player.height), 2)
+            pygame.draw.line(self.screen, (255, 100, 100),
+                           (self.player.x + self.player.width, self.player.y),
+                           (self.player.x, self.player.y + self.player.height), 2)
+        
+        # Отрисовка меча атаки (ближний бой)
+        if self.player.attacking and self.player.attack_sword['visible'] and not self.player.sword_thrown:
+            pygame.draw.rect(self.screen, WHITE,
+                           (self.player.attack_sword['x'], self.player.attack_sword['y'],
+                            self.player.attack_sword['width'], self.player.attack_sword['height']))
+            # Ручка
+            if self.player.direction in ['up', 'down']:
+                pygame.draw.rect(self.screen, GOLD,
+                               (self.player.attack_sword['x'] + 8, self.player.attack_sword['y'], 8, 8))
+            else:
+                pygame.draw.rect(self.screen, GOLD,
+                               (self.player.attack_sword['x'], self.player.attack_sword['y'] + 8, 8, 8))
+        
+        # Отрисовка врагов
+        for enemy in self.enemies:
+            color = BOSS_RED if enemy.is_boss else ENEMY_RED
+            pygame.draw.rect(self.screen, color,
+                           (enemy.x, enemy.y, enemy.width, enemy.height))
+            # Глаза и рот
+            pygame.draw.rect(self.screen, WHITE, (enemy.x + 8, enemy.y + 8, 4, 4))
+            pygame.draw.rect(self.screen, WHITE, (enemy.x + 20, enemy.y + 8, 4, 4))
+            pygame.draw.rect(self.screen, WHITE, (enemy.x + 10, enemy.y + 20, 12, 4))
+            
+            # Полоска здоровья босса
+            if enemy.is_boss:
+                health_percent = enemy.health / 500
+                pygame.draw.rect(self.screen, (51, 51, 51),
+                               (enemy.x, enemy.y - 15, enemy.width, 8))
+                pygame.draw.rect(self.screen, (255, 0, 0),
+                               (enemy.x, enemy.y - 15, enemy.width * health_percent, 8))
+                text = self.small_font.render("БОСС", True, YELLOW)
+                self.screen.blit(text, (enemy.x + enemy.width // 2 - text.get_width() // 2, enemy.y - 30))
+            
+            # Снаряды босса
+            for projectile in enemy.projectiles:
+                pygame.draw.circle(self.screen, (255, 0, 0),
+                                 (int(projectile['x'] + projectile['width'] / 2),
+                                  int(projectile['y'] + projectile['height'] / 2)), 5)
+                pygame.draw.circle(self.screen, (255, 100, 100, 127),
+                                 (int(projectile['x'] + projectile['width'] / 2),
+                                  int(projectile['y'] + projectile['height'] / 2)), 10)
+        
+        # Отрисовка дверей
+        for door in self.doors:
+            color = DOOR_LOCKED if door['locked'] else DOOR_COLOR
+            pygame.draw.rect(self.screen, color,
+                           (door['x'], door['y'], door['width'], door['height']))
+            pygame.draw.rect(self.screen, GOLD,
+                           (door['x'] + 5, door['y'] + door['height'] // 2 - 5, 5, 10))
+            
+            if self.current_screen == 2:
+                text = self.small_font.render("Выход", True, WHITE)
+                self.screen.blit(text, (door['x'] + door['width'] // 2 - text.get_width() // 2, door['y'] - 20))
+                arrow = self.font.render("↓", True, YELLOW)
+                self.screen.blit(arrow, (door['x'] + door['width'] // 2 - arrow.get_width() // 2, door['y'] - 50))
+        
+        # Отрисовка HUD
+        # Полоска здоровья
+        health_percent = self.player.health / self.player.max_health
+        pygame.draw.rect(self.screen, (51, 51, 51), (10, 10, 200, 20))
+        pygame.draw.rect(self.screen, (255, 0, 0), (10, 10, 200 * health_percent, 20))
+        
+        # Особый индикатор для полного здоровья
+        if self.player.health == self.player.max_health:
+            pygame.draw.rect(self.screen, (255, 255, 0), (10, 10, 200, 20), 2)
+            # Анимация полного здоровья
+            pulse = int(math.sin(pygame.time.get_ticks() * 0.01) * 3 + 3)
+            pygame.draw.rect(self.screen, (255, 255, 0, 100), 
+                           (10 - pulse, 10 - pulse, 
+                            200 + pulse*2, 20 + pulse*2), pulse)
+        
+        # Информация игрока
+        name_text = self.small_font.render(f"Имя: {self.player.name}", True, GOLD)
+        screen_text = self.small_font.render(f"Экран: {min(self.current_screen, 3)}/3", True, GOLD)
+        self.screen.blit(name_text, (10, 40))
+        self.screen.blit(screen_text, (10, 60))
+        
+        # Инвентарь
+        pygame.draw.rect(self.screen, (255, 255, 255, 25), (10, 90, 40, 40), 1)
+        if self.player.has_sword:
+            sword_icon = self.small_font.render("⚔️", True, GOLD)
+        elif self.player.sword_thrown:
+            sword_icon = self.small_font.render("⚔️", True, (200, 100, 0))
+        else:
+            sword_icon = self.small_font.render("⚔️", True, (102, 102, 102))
+        self.screen.blit(sword_icon, (20, 100))
+        
+        # Подсказка для броска меча
+        if self.player.can_throw_sword():
+            throw_text = self.small_font.render("F - Кинуть меч", True, YELLOW)
+            self.screen.blit(throw_text, (60, 100))
+        elif self.player.sword_thrown:
+            throw_text = self.small_font.render("Меч в полете!", True, (255, 150, 0))
+            self.screen.blit(throw_text, (60, 100))
+        
+        # Управление
+        controls = [
+            "Управление:",
+            "←↑→↓ - Движение", 
+            "ПРОБЕЛ - Атака",
+            "F - Кинуть меч"
+        ]
+        for i, text in enumerate(controls):
+            control_text = self.small_font.render(text, True, GOLD)
+            self.screen.blit(control_text, (SCREEN_WIDTH - 200, 10 + i * 25))
+        
+        # Сообщения
+        if self.current_screen == 1 and not self.player.has_sword:
+            text = self.font.render("Войдите в пещеру, чтобы найти меч!", True, WHITE)
+            self.screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, 50))
+        elif self.current_screen == 1 and self.player.has_sword:
+            text = self.font.render("Теперь вы можете пройти через дверь!", True, (0, 255, 0))
+            self.screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, 50))
+        elif self.current_screen == 2 and not self.player.has_sword:
+            text = self.font.render("Найдите меч в пещере!", True, YELLOW)
+            self.screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, 50))
+        elif self.current_screen == 2 and self.player.has_sword:
+            text = self.font.render("Меч найден! Выйдите из пещеры.", True, (0, 255, 0))
+            self.screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, 50))
+        elif self.current_screen == 3 and len(self.enemies) > 0:
+            text = self.font.render("Победите всех врагов, чтобы открыть дверь!", True, WHITE)
+            self.screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, 50))
+        elif self.current_screen == 4:
+            text = self.font.render("Победите босса, чтобы завершить игру!", True, WHITE)
+            self.screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, 50))
+        
+        # Главное меню
+        if self.game_state == "main_menu":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            overlay.set_alpha(200)
+            overlay.fill(BLACK)
+            self.screen.blit(overlay, (0, 0))
+            
+            title = self.font.render("THE LEGEND OF LINK", True, GOLD)
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 200))
+            
+            pygame.draw.rect(self.screen, DOOR_COLOR, (SCREEN_WIDTH // 2 - 100, 300, 200, 50), border_radius=5)
+            start_text = self.font.render("НОВАЯ ИГРА", True, WHITE)
+            self.screen.blit(start_text, (SCREEN_WIDTH // 2 - start_text.get_width() // 2, 310))
+            
+            # Инструкции
+            instructions = [
+                "Управление:",
+                "Стрелки - движение",
+                "Пробел - ближняя атака",
+                "F - кинуть меч (при полном HP)",
+                "ESC - выход"
+            ]
+            for i, line in enumerate(instructions):
+                instr_text = self.small_font.render(line, True, LIGHT_BLUE)
+                self.screen.blit(instr_text, (SCREEN_WIDTH // 2 - instr_text.get_width() // 2, 400 + i * 25))
+        
+        # Создание персонажа
+        elif self.game_state == "character_creation":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            overlay.set_alpha(200)
+            overlay.fill(BLACK)
+            self.screen.blit(overlay, (0, 0))
+            
+            title = self.font.render("СОЗДАНИЕ ПЕРСОНАЖА", True, GOLD)
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 200))
+            
+            name_text = self.font.render("Имя героя:", True, GOLD)
+            self.screen.blit(name_text, (SCREEN_WIDTH // 2 - 150, 250))
+            
+            # Поле ввода
+            input_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, 300, 200, 40)
+            pygame.draw.rect(self.screen, WHITE, input_rect, 2)
+            name_input_text = self.font.render(self.name_input, True, WHITE)
+            self.screen.blit(name_input_text, (input_rect.x + 10, input_rect.y + 5))
+            
+            # Кнопка старта
+            start_button = pygame.Rect(SCREEN_WIDTH // 2 - 75, 400, 150, 50)
+            pygame.draw.rect(self.screen, DOOR_COLOR, start_button, border_radius=5)
+            start_text = self.font.render("НАЧАТЬ", True, WHITE)
+            self.screen.blit(start_text, (start_button.x + start_button.width // 2 - start_text.get_width() // 2,
+                                         start_button.y + 15))
+            
+            # Инструкция
+            instr_text = self.small_font.render("Введите имя и нажмите НАЧАТЬ", True, LIGHT_BLUE)
+            self.screen.blit(instr_text, (SCREEN_WIDTH // 2 - instr_text.get_width() // 2, 500))
+            
+            if self.name_input_active:
+                # Курсор
+                cursor_x = input_rect.x + 10 + name_input_text.get_width()
+                pygame.draw.line(self.screen, WHITE, 
+                               (cursor_x, input_rect.y + 5),
+                               (cursor_x, input_rect.y + 35), 2)
+        
+        # Игра окончена
+        elif self.game_state == "game_over":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            overlay.set_alpha(200)
+            overlay.fill(BLACK)
+            self.screen.blit(overlay, (0, 0))
+            
+            title = self.font.render("ИГРА ОКОНЧЕНА", True, ENEMY_RED)
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 200))
+            
+            score_text = self.font.render(f"Достигнут экран: {self.current_screen}", True, WHITE)
+            self.screen.blit(score_text, (SCREEN_WIDTH // 2 - score_text.get_width() // 2, 250))
+            
+            restart_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 350, 200, 50)
+            pygame.draw.rect(self.screen, DOOR_COLOR, restart_button, border_radius=5)
+            restart_text = self.font.render("ЗАНОВО", True, WHITE)
+            self.screen.blit(restart_text, (restart_button.x + restart_button.width // 2 - restart_text.get_width() // 2,
+                                           restart_button.y + 15))
+            
+            menu_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 420, 200, 50)
+            pygame.draw.rect(self.screen, DOOR_LOCKED, menu_button, border_radius=5)
+            menu_text = self.font.render("ГЛАВНОЕ МЕНЮ", True, WHITE)
+            self.screen.blit(menu_text, (menu_button.x + menu_button.width // 2 - menu_text.get_width() // 2,
+                                        menu_button.y + 15))
+        
+        # Победа
+        elif self.game_state == "victory":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            overlay.set_alpha(200)
+            overlay.fill(BLACK)
+            self.screen.blit(overlay, (0, 0))
+            
+            title = self.font.render("ПОБЕДА!", True, GOLD)
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 200))
+            
+            congrats_text = self.font.render(f"{self.player.name} спас королевство!", True, (0, 255, 0))
+            self.screen.blit(congrats_text, (SCREEN_WIDTH // 2 - congrats_text.get_width() // 2, 250))
+            
+            restart_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 350, 200, 50)
+            pygame.draw.rect(self.screen, DOOR_COLOR, restart_button, border_radius=5)
+            restart_text = self.font.render("ИГРАТЬ СНОВА", True, WHITE)
+            self.screen.blit(restart_text, (restart_button.x + restart_button.width // 2 - restart_text.get_width() // 2,
+                                           restart_button.y + 15))
+            
+            menu_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 420, 200, 50)
+            pygame.draw.rect(self.screen, (0, 100, 200), menu_button, border_radius=5)
+            menu_text = self.font.render("ГЛАВНОЕ МЕНЮ", True, WHITE)
+            self.screen.blit(menu_text, (menu_button.x + menu_button.width // 2 - menu_text.get_width() // 2,
+                                        menu_button.y + 15))
+        
+        pygame.display.flip()
+    
+    def handle_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            
+            if event.type == pygame.KEYDOWN:
+                # Выход из игры
+                if event.key == pygame.K_ESCAPE:
+                    if self.game_state == "playing":
+                        self.game_state = "main_menu"
+                    else:
+                        pygame.quit()
+                        sys.exit()
+                
+                # Атака (ближний бой)
+                if event.key == pygame.K_SPACE and self.game_state == "playing":
+                    if (not self.player.attacking and 
+                        self.player.has_sword and 
+                        not self.player.sword_thrown):
+                        self.player.attacking = True
+                        self.player.attack_timer = 15
+                        self.update_attack_sword_position()
+                
+                # Бросок меча (дальняя атака)
+                if event.key == pygame.K_f and self.game_state == "playing":
+                    if self.player.can_throw_sword():
+                        self.player.throw_sword()
+                
+                # Ввод имени в создании персонажа
+                if self.game_state == "character_creation" and self.name_input_active:
+                    if event.key == pygame.K_RETURN:
+                        if self.name_input.strip():
+                            self.player.name = self.name_input
+                            self.player_name = self.name_input
+                            self.game_state = "playing"
+                            self.load_screen(1)
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.name_input = self.name_input[:-1]
+                    else:
+                        if len(self.name_input) < 12 and event.unicode.isprintable():
+                            self.name_input += event.unicode
+            
+            # Обработка нажатий клавиш для движения
+            if event.type == pygame.KEYDOWN:
+                if event.key in [pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT]:
+                    self.keys[event.key] = True
+            elif event.type == pygame.KEYUP:
+                if event.key in [pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT]:
+                    self.keys[event.key] = False
+            
+            # Обработка кликов мыши
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mouse_pos = pygame.mouse.get_pos()
+                
+                if self.game_state == "main_menu":
+                    button_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, 300, 200, 50)
+                    if button_rect.collidepoint(mouse_pos):
+                        self.game_state = "character_creation"
+                        self.name_input = ""
+                        self.name_input_active = True
+                
+                elif self.game_state == "character_creation":
+                    input_rect = pygame.Rect(SCREEN_WIDTH // 2 - 100, 300, 200, 40)
+                    start_button = pygame.Rect(SCREEN_WIDTH // 2 - 75, 400, 150, 50)
+                    
+                    if input_rect.collidepoint(mouse_pos):
+                        self.name_input_active = True
+                    else:
+                        self.name_input_active = False
+                    
+                    if start_button.collidepoint(mouse_pos):
+                        if self.name_input.strip():
+                            self.player.name = self.name_input
+                            self.player_name = self.name_input
+                            self.game_state = "playing"
+                            self.load_screen(1)
+                
+                elif self.game_state == "game_over":
+                    restart_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 350, 200, 50)
+                    menu_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 420, 200, 50)
+                    
+                    if restart_button.collidepoint(mouse_pos):
+                        self.player.reset()
+                        self.sword = Sword()
+                        self.game_state = "playing"
+                        self.load_screen(1)
+                    
+                    elif menu_button.collidepoint(mouse_pos):
+                        self.player.reset()
+                        self.sword = Sword()
+                        self.game_state = "main_menu"
+                
+                elif self.game_state == "victory":
+                    restart_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 350, 200, 50)
+                    menu_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, 420, 200, 50)
+                    
+                    if restart_button.collidepoint(mouse_pos):
+                        self.player.reset()
+                        self.sword = Sword()
+                        self.game_state = "playing"
+                        self.load_screen(1)
+                    
+                    elif menu_button.collidepoint(mouse_pos):
+                        self.player.reset()
+                        self.sword = Sword()
+                        self.game_state = "main_menu"
+    
+    def run(self):
+        while True:
+            self.handle_events()
+            self.update()
+            self.draw()
+            self.clock.tick(FPS)
+
+# Запуск игры
+if __name__ == "__main__":
+    game = Game()
+    game.run()
